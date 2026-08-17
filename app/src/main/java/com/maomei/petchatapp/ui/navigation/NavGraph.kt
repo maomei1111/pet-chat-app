@@ -90,6 +90,12 @@ fun PetChatNavGraph(factory: AppViewModelFactory) {
                 val onboardingViewModel = rememberOnboardingViewModel(navController, backStackEntry, factory)
                 PhotoPickScreen(
                     photosFlow = onboardingViewModel.photos,
+                    isGooglePhotosAvailable = onboardingViewModel.isGooglePhotosAvailable,
+                    googlePickerState = onboardingViewModel.googlePickerState,
+                    onStartGooglePicker = onboardingViewModel::startGooglePhotoPicker,
+                    onAuthorizationResolved = onboardingViewModel::onAuthorizationResolved,
+                    onPollForSelection = onboardingViewModel::pollForSelection,
+                    onDismissGoogleError = onboardingViewModel::dismissGooglePickerError,
                     onPhotosPicked = onboardingViewModel::importPhotos,
                     onNext = { navController.navigate(Routes.PHOTO_CONFIRM) }
                 )

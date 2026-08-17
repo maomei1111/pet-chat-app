@@ -1,5 +1,7 @@
 package com.maomei.petchatapp.ui.onboarding
 
+import android.app.PendingIntent
+import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -8,6 +10,9 @@ import com.maomei.petchatapp.data.model.PetProfile
 import com.maomei.petchatapp.data.model.PetSpecies
 import com.maomei.petchatapp.data.model.Personality
 import com.maomei.petchatapp.data.model.ReplyLength
+import com.maomei.petchatapp.data.photo.GoogleOAuthService
+import com.maomei.petchatapp.data.photo.GooglePhotosPickerService
+import com.maomei.petchatapp.data.photo.GooglePickerSession
 import com.maomei.petchatapp.data.repository.PetRepository
 import com.maomei.petchatapp.data.repository.PhotoRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,6 +23,16 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
+
+/** 7章 Google Photos Picker API 連携フローの状態。 */
+sealed interface GooglePickerUiState {
+    data object Idle : GooglePickerUiState
+    data object RequestingAuthorization : GooglePickerUiState
+    data class NeedsUserConsent(val pendingIntent: PendingIntent) : GooglePickerUiState
+    data class WaitingForSelection(val session: GooglePickerSession) : GooglePickerUiState
+    data object Importing : GooglePickerUiState
+    data class Failed(val message: String) : GooglePickerUiState
+}
 
 /** ペット登録フロー（4.1〜4.7）で入力中のドラフト状態。 */
 data class OnboardingUiState(
@@ -41,7 +56,9 @@ data class OnboardingUiState(
  */
 class OnboardingViewModel(
     private val petRepository: PetRepository,
-    private val photoRepository: PhotoRepository
+    private val photoRepository: PhotoRepository,
+    private val googleOAuthService: GoogleOAuthService,
+    private val googlePhotosPickerService: GooglePhotosPickerService?
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(OnboardingUiState())
@@ -50,6 +67,114 @@ class OnboardingViewModel(
     val photos: StateFlow<List<PetPhoto>> = _uiState
         .value.let { photoRepository.observePhotosForPet(it.petId) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** Google Cloud Console 側のOAuthクライアント登録が完了していれば true。 */
+    val isGooglePhotosAvailable: Boolean get() = googlePhotosPickerService != null
+
+    private val _googlePickerState = MutableStateFlow<GooglePickerUiState>(GooglePickerUiState.Idle)
+    val googlePickerState: StateFlow<GooglePickerUiState> = _googlePickerState.asStateFlow()
+
+    private var pendingAccessToken: String? = null
+
+    /** 「Googleフォトから写真を選ぶ」ボタン押下時のエントリポイント。 */
+    fun startGooglePhotoPicker() {
+        val service = googlePhotosPickerService ?: run {
+            _googlePickerState.value = GooglePickerUiState.Failed("Googleフォト連携は準備中です")
+            return
+        }
+        _googlePickerState.value = GooglePickerUiState.RequestingAuthorization
+        viewModelScope.launch {
+            runCatching { googleOAuthService.requestAuthorization() }
+                .onSuccess { result ->
+                    val token = result.accessToken
+                    when {
+                        token != null -> createSessionAndOpen(service, token)
+                        result.hasResolution() && result.pendingIntent != null ->
+                            _googlePickerState.value = GooglePickerUiState.NeedsUserConsent(result.pendingIntent!!)
+                        else ->
+                            _googlePickerState.value = GooglePickerUiState.Failed("Google認証を開始できませんでした")
+                    }
+                }
+                .onFailure {
+                    _googlePickerState.value = GooglePickerUiState.Failed("Google認証を開始できませんでした")
+                }
+        }
+    }
+
+    /** OAuth同意画面（`StartIntentSenderForResult`）から戻ってきた結果を処理する。 */
+    fun onAuthorizationResolved(intent: Intent?) {
+        val service = googlePhotosPickerService ?: return
+        val result = intent?.let { googleOAuthService.resultFromIntent(it) }
+        val token = result?.accessToken
+        if (token == null) {
+            _googlePickerState.value = GooglePickerUiState.Failed("写真を取得できませんでした")
+            return
+        }
+        viewModelScope.launch { createSessionAndOpen(service, token) }
+    }
+
+    private suspend fun createSessionAndOpen(service: GooglePhotosPickerService, accessToken: String) {
+        pendingAccessToken = accessToken
+        runCatching { service.createSession(accessToken) }
+            .onSuccess { session ->
+                _googlePickerState.value = GooglePickerUiState.WaitingForSelection(session)
+            }
+            .onFailure {
+                _googlePickerState.value = GooglePickerUiState.Failed("写真を取得できませんでした")
+            }
+    }
+
+    /**
+     * pickerUri を外部（Googleフォト/ブラウザ）で開いた後、UI側（LaunchedEffect）から呼び出す。
+     * 選択完了をポーリングで検知し、完了していれば画像をダウンロードして端末内へ保存する（仕様 7.3, 7.5, 7.6）。
+     */
+    fun pollForSelection() {
+        val service = googlePhotosPickerService ?: return
+        val token = pendingAccessToken ?: return
+        val session = (_googlePickerState.value as? GooglePickerUiState.WaitingForSelection)?.session ?: return
+
+        viewModelScope.launch {
+            val ready = runCatching { service.pollUntilReady(token, session) }.getOrDefault(false)
+            if (!ready) {
+                _googlePickerState.value = GooglePickerUiState.Failed("写真を取得できませんでした")
+                return@launch
+            }
+
+            _googlePickerState.value = GooglePickerUiState.Importing
+            val imported = runCatching { service.importSelectedPhotos(token, _uiState.value.petId, session.id) }
+                .getOrDefault(emptyList())
+            runCatching { service.deleteSession(token, session.id) }
+            pendingAccessToken = null
+
+            if (imported.isEmpty()) {
+                _googlePickerState.value = GooglePickerUiState.Failed("写真を取得できませんでした")
+                return@launch
+            }
+
+            photoRepository.saveImportedPhotos(imported)
+            if (_uiState.value.mainPhotoId == null) {
+                val first = imported.first()
+                photoRepository.setMainPhoto(_uiState.value.petId, first.id)
+                _uiState.update { it.copy(mainPhotoId = first.id, photoErrorMessage = null) }
+            }
+            _googlePickerState.value = GooglePickerUiState.Idle
+        }
+    }
+
+    fun cancelGooglePicker() {
+        val token = pendingAccessToken
+        val session = (_googlePickerState.value as? GooglePickerUiState.WaitingForSelection)?.session
+        pendingAccessToken = null
+        _googlePickerState.value = GooglePickerUiState.Idle
+        val service = googlePhotosPickerService
+        if (service != null && token != null && session != null) {
+            viewModelScope.launch { runCatching { service.deleteSession(token, session.id) } }
+        }
+    }
+
+    fun dismissGooglePickerError() {
+        _googlePickerState.value = GooglePickerUiState.Idle
+    }
 
     fun selectSpecies(species: PetSpecies) {
         _uiState.update {

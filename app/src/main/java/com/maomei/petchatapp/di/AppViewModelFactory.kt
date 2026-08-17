@@ -20,7 +20,9 @@ class AppViewModelFactory(private val container: AppContainer) : ViewModelProvid
             modelClass.isAssignableFrom(OnboardingViewModel::class.java) ->
                 OnboardingViewModel(
                     petRepository = container.petRepository,
-                    photoRepository = container.photoRepository
+                    photoRepository = container.photoRepository,
+                    googleOAuthService = container.googleOAuthService,
+                    googlePhotosPickerService = container.googlePhotosPickerService
                 ) as T
 
             modelClass.isAssignableFrom(ChatViewModel::class.java) ->

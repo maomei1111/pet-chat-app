@@ -26,6 +26,11 @@ class PhotoRepository(
         return imported
     }
 
+    /** Google Photos Picker API 経由で既にダウンロード・保存済みの [PetPhoto] を DB に登録する。 */
+    suspend fun saveImportedPhotos(photos: List<PetPhoto>) {
+        dao.insertAll(photos.map { it.toEntity() })
+    }
+
     suspend fun deletePhoto(photo: PetPhoto) {
         dao.delete(photo.toEntity())
         photoPickerService.deletePhotoFile(photo.localPath)

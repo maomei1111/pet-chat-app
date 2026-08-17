@@ -5,6 +5,9 @@ import com.maomei.petchatapp.BuildConfig
 import com.maomei.petchatapp.data.ai.AiReplyProvider
 import com.maomei.petchatapp.data.ai.BackendAiReplyProvider
 import com.maomei.petchatapp.data.db.AppDatabase
+import com.maomei.petchatapp.data.photo.GoogleOAuthService
+import com.maomei.petchatapp.data.photo.GooglePhotosApiClient
+import com.maomei.petchatapp.data.photo.GooglePhotosPickerService
 import com.maomei.petchatapp.data.photo.PhotoPickerService
 import com.maomei.petchatapp.data.photo.SystemPhotoPickerService
 import com.maomei.petchatapp.data.repository.ChatRepository
@@ -22,8 +25,21 @@ class AppContainer(context: Context) {
 
     private val database: AppDatabase by lazy { AppDatabase.getInstance(appContext) }
 
-    // 将来 Google Photos Picker API 実装に差し替える際はここを変更するだけでよい。
+    // Google Cloud Console 側のOAuthクライアント登録が完了するまでは
+    // local.properties の google.photos.enabled=false のままにしておく（暫定実装のみ有効）。
     val photoPickerService: PhotoPickerService by lazy { SystemPhotoPickerService(appContext) }
+
+    val isGooglePhotosEnabled: Boolean get() = BuildConfig.GOOGLE_PHOTOS_ENABLED
+
+    val googleOAuthService: GoogleOAuthService by lazy { GoogleOAuthService(appContext) }
+
+    val googlePhotosPickerService: GooglePhotosPickerService? by lazy {
+        if (isGooglePhotosEnabled) {
+            GooglePhotosPickerService(appContext, GooglePhotosApiClient())
+        } else {
+            null
+        }
+    }
 
     // バックエンド（backend/ をRailway等にデプロイしたもの）のURLと共有シークレットは
     // local.properties の backend.base.url / backend.shared.secret から供給される（app/build.gradle.kts 参照）。

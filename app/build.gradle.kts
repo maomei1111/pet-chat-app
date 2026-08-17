@@ -19,6 +19,12 @@ val localProperties = Properties().apply {
 val backendBaseUrl: String = localProperties.getProperty("backend.base.url", "")
 val backendSharedSecret: String = localProperties.getProperty("backend.shared.secret", "")
 
+// Google Photos Picker API の正式連携は、Google Cloud Console 側でOAuthクライアント
+// (パッケージ名 com.maomei.petchatapp + 署名SHA-1) の登録が完了するまで有効化できない。
+// 未設定（false）の間は SystemPhotoPickerService（暫定実装）のみが使われる。
+val googlePhotosEnabled: Boolean =
+    localProperties.getProperty("google.photos.enabled", "false").toBoolean()
+
 android {
     namespace = "com.maomei.petchatapp"
     compileSdk = 36
@@ -33,6 +39,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "BACKEND_BASE_URL", "\"$backendBaseUrl\"")
         buildConfigField("String", "BACKEND_SHARED_SECRET", "\"$backendSharedSecret\"")
+        buildConfigField("boolean", "GOOGLE_PHOTOS_ENABLED", "$googlePhotosEnabled")
     }
 
     buildTypes {
@@ -88,7 +95,9 @@ dependencies {
     ksp("androidx.room:room-compiler:2.7.1")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.google.android.gms:play-services-auth:21.2.0")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation(platform("androidx.compose:compose-bom:2025.09.00"))
