@@ -47,16 +47,17 @@ class ReplyEngine(private val aiReplyProvider: AiReplyProvider) {
         if (templateCandidates.isNotEmpty()) {
             val chosen = templateCandidates.random()
             return GeneratedReply(
-                text = finalize(chosen, pet),
+                text = finalizeTemplate(chosen, pet),
                 category = category,
                 source = ReplySource.TEMPLATE
             )
         }
 
         // 判定不能などテンプレートが無い場合のみ AI 経路を試す。
+        // AI（バックエンド）側で useEmoji に応じた絵文字付与まで完結しているため、ここでは追加しない。
         val aiText = aiReplyProvider.generateReply(pet, userText, category)
         if (aiText != null) {
-            return GeneratedReply(text = finalize(aiText, pet), category = category, source = ReplySource.AI)
+            return GeneratedReply(text = enforceLength(aiText), category = category, source = ReplySource.AI)
         }
 
         return GeneratedReply(
@@ -66,7 +67,7 @@ class ReplyEngine(private val aiReplyProvider: AiReplyProvider) {
         )
     }
 
-    private fun finalize(rawTemplate: String, pet: PetProfile): String {
+    private fun finalizeTemplate(rawTemplate: String, pet: PetProfile): String {
         var text = rawTemplate
             .replace("{firstPerson}", pet.firstPerson)
             .replace("{ownerCallName}", pet.ownerCallName)
